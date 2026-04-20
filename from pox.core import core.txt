@@ -1,0 +1,47 @@
+from pox.core import core
+import pox.openflow.libopenflow_01 as of
+
+log = core.getLogger()
+
+class Firewall(object):
+    def __init__(self, connection):
+        self.connection = connection
+        self.mac_to_port = {}
+        connection.addListeners(self)
+
+    def _handle_PacketIn(self, event):
+        packet = event.parsed
+        in_port = event.port
+
+        src = packet.src
+        dst = packet.dst
+
+        # Learn MAC address → port mapping
+        self.mac_to_port[src] = in_port
+
+        log.info(f"Packet: {src} -> {dst}")
+
+        # BLOCK RULE (h1 → h2)
+        if str(src) == "00:00:00:00:00:01" and str(dst) == "00:00:00:00:00:02":
+            log.info("BLOCKED TRAFFIC!")
+            return  # Drop packet
+
+        # Forwarding logic
+        if dst in self.mac_to_port:
+            out_port = self.mac_to_port[dst]
+        else:
+            out_port = of.OFPP_FLOOD
+
+        # Send packet using OpenFlow
+        msg = of.ofp_packet_out()
+        msg.data = event.ofp
+        msg.actions.append(of.ofp_action_output(port=out_port))
+        self.connection.send(msg)
+
+
+def launch():
+    def start_switch(event):
+        log.info("Switch connected")
+        Firewall(event.connection)
+
+    core.openflow.addListenerByName("ConnectionUp", start_switch)
